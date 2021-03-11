@@ -320,9 +320,14 @@ for n in range(1, num_time_steps + 1):
         # Assembler problem
         A, b = manager.assemble_matrix_rhs(equations=["pressure equation"], ad_var=[p])
         # Solve for pressure increment and update pressure
-        pressure_increment = sps.linalg.spsolve(A, b)
+        p_increment = sps.linalg.spsolve(A, b)
         # Update approximation
-        d[pp.STATE][pp.ITERATE][pressure_variable] += pressure_increment
+        dof_manager.distribute_restricted_variable(
+            values=p_increment,
+            variable_names=[pressure_variable],
+            iterate=True,
+            additive=True,
+        )
 
         # Compute 'error' as norm of the residual
         residual_norm = np.linalg.norm(b, 2)
@@ -345,7 +350,7 @@ for n in range(1, num_time_steps + 1):
         total_iteration_counter += 1
 
     #######################################
-    # Transport step - brine
+    # Transport step - brine and co2
     #######################################
     iteration_counter = 0
     residual_norm = 1
@@ -357,12 +362,18 @@ for n in range(1, num_time_steps + 1):
 
         # Assembler problem
         A, b = manager.assemble_matrix_rhs(
-            equations=["brine transport equation"], ad_var=[sb]
+            equations=["brine transport equation", "co2 transport equation"],
+            ad_var=[sb, sc],
         )
         # Solve for pressure increment and update pressure
-        sb_increment = sps.linalg.spsolve(A, b)
+        s_increment = sps.linalg.spsolve(A, b)
         # Update approximation
-        d[pp.STATE][pp.ITERATE][brine_saturation_variable] += sb_increment
+        dof_manager.distribute_restricted_variable(
+            values=s_increment,
+            variable_names=[brine_saturation_variable, co2_saturation_variable],
+            iterate=True,
+            additive=True,
+        )
 
         # Compute 'error' as norm of the residual
         residual_norm = np.linalg.norm(b, 2)
@@ -374,50 +385,7 @@ for n in range(1, num_time_steps + 1):
             initial_residual_norm = 1
         rel_res = residual_norm / initial_residual_norm
         print(
-            "Brine eq: iteration",
-            iteration_counter,
-            "abs res",
-            residual_norm,
-            "rel res",
-            residual_norm / initial_residual_norm,
-        )
-
-        # Prepare next iteration
-        iteration_counter += 1
-        total_iteration_counter += 1
-
-    #######################################
-    # Transport step - co2
-    #######################################
-    iteration_counter = 0
-    residual_norm = 1
-    rel_res = 1
-
-    while iteration_counter <= max_iter and not (
-        rel_res < rel_tol or residual_norm < abs_tol
-    ):
-
-        # Assembler problem
-        A, b = manager.assemble_matrix_rhs(
-            equations=["co2 transport equation"], ad_var=[sc]
-        )
-
-        # Solve for pressure increment and update pressure
-        sc_increment = sps.linalg.spsolve(A, b)
-        # Update approximation
-        d[pp.STATE][pp.ITERATE][co2_saturation_variable] += sc_increment
-
-        # Compute 'error' as norm of the residual
-        residual_norm = np.linalg.norm(b, 2)
-        if iteration_counter == 0:
-            initial_residual_norm = residual_norm
-        else:
-            initial_residual_norm = max(residual_norm, initial_residual_norm)
-        if initial_residual_norm < 1e-8:
-            initial_residual_norm = 1
-        rel_res = residual_norm / initial_residual_norm
-        print(
-            "CO2 eq: iteration",
+            "Transport eq: iteration",
             iteration_counter,
             "abs res",
             residual_norm,
