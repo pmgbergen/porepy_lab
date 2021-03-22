@@ -13,9 +13,9 @@ import scipy.sparse.linalg as spla
 import porepy as pp
 
 
-transport_key = 'transport'
+transport_key = "transport"
 
-g = pp.CartGrid([3])
+g = pp.CartGrid([10])
 g.compute_geometry()
 gb = pp.GridBucket()
 gb.add_nodes(g)
@@ -23,24 +23,23 @@ gb.add_nodes(g)
 
 data = gb.node_props(g)
 
-bc = pp.BoundaryCondition(g, np.array([0]), np.array(['dir']))
+bc = pp.BoundaryCondition(g, np.array([0]), np.array(["dir"]))
 bc_values = np.zeros(g.num_faces)
 bc_values[0] = 1
 
-# NB: Neumann outflow condition at the right end. This is not properly handled
-# by the current code. I'm working on the fix, it is a bit 
-transport_data = {'darcy_flux': np.ones(g.num_faces),
-                  'bc': bc,
-                  'bc_values': bc_values,
-                  'mass_weight': 0.25 * np.ones(g.num_cells)
+transport_data = {
+    "darcy_flux": np.ones(g.num_faces),
+    "bc": bc,
+    "bc_values": bc_values,
+    "mass_weight": 0.25 * np.ones(g.num_cells),
 }
 data = pp.initialize_data(g, data, transport_key, transport_data)
 
-var = 'c'
+var = "c"
 
 data[pp.STATE] = {var: np.zeros(g.num_cells)}
 
-data[pp.PRIMARY_VARIABLES] = {var: {'cells': 1}}
+data[pp.PRIMARY_VARIABLES] = {var: {"cells": 1}}
 
 dof_manager = pp.DofManager(gb)
 eq_manager = pp.ad.EquationManager(gb, dof_manager)
@@ -58,19 +57,19 @@ dt = 1
 
 div = pp.ad.Divergence([g])
 
-transport = (mass.mass * (c - c_prev) / dt
-             + div * upwind.upwind * c
-             - div * upwind.rhs * bc_c
-             )
+transport = (
+    mass.mass * (c - c_prev) / dt
+    + div * upwind.upwind * c
+    - div * upwind.rhs * bc_c
+    + div * upwind.outflow_neumann * c
+)
 
 transport_eq = pp.ad.Expression(transport, dof_manager)
 transport_eq.discretize(gb)
 
 for i in range(10):
     c = data[pp.STATE][var]
-    print(c)
+    #    print(c[-2:])
     ad = transport_eq.to_ad(gb)
     update = spla.spsolve(ad.jac, -ad.val)
     dof_manager.distribute_variable(update, additive=True)
-
-
