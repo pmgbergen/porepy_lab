@@ -191,9 +191,9 @@ def transport_in_gb(gb, num_aq_components, domain, parameter_keyword):
     return gb
 
 #%% Create a fracture and a gb
-frac = np.array( [ [0.75, 0.75], [0.0, 0.9] ]) # Changed from [1, 1], [0.1, 0.9] 
+frac = np.array( [ [1, 1], [0.1, 0.9]   ]) # Changed from[0.75, 0.75], [0.0, 0.9]
 frac2 = np.array( [[1.5, 1.5], [0.5, 1] ])
-fracs=[frac, frac2]
+fracs=[frac, ]
 for f in fracs:
     is_x_frac = f[1, 0] == f[1, 1]
     is_y_frac = f[0, 0] == f[0, 1]
@@ -353,7 +353,7 @@ solution = spla.spsolve(A,b) # Pressure
 dof_manager.distribute_variable(solution, )
 
 # Plot the pressure distribution
-pp.plot_grid(gb, grid_variable, figsize=(15,12))
+#pp.plot_grid(gb, grid_variable, figsize=(15,12))
 
 # Compute the Darcy flux
 pp.fvutils.compute_darcy_flux(gb, 
@@ -503,8 +503,8 @@ if len(edge_list) > 0 :
 # Transport over the interfaces
 if len(edge_list) > 0:
     
-    # Like earlier, we need a mapping between the aquoues and "all" the spcecies
-    # btu now with mortar_cells
+    # Like earlier, we need a mapping between the aquoues and "all" spcecies
+    # but now with mortar_cells
     cols2 = np.ravel(
     aq_components.reshape((-1, 1)) + 
     ( num_components * np.arange(gb.num_mortar_cells() )), "F" )
