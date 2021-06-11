@@ -5,6 +5,10 @@ Created on Fri May 28 08:31:36 2021
 
 Test script for transport in a domain with a fracture.
 
+IMPORTANT
+To be able to run this script, you will need the grid_operator.py and 
+hyperbolic_interface_law.py that can be found at my forked porepy_lab.
+
 @author: shin.banshoya@uib.no
 """
 
@@ -13,6 +17,7 @@ import porepy as pp
 import numpy as np
 import scipy.sparse as scs
 import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
 
 #%% The problem data
 
@@ -218,9 +223,9 @@ kw_t = "transport"
 domain = {"xmin":0 , "xmax": 2, "ymin": 0, "ymax": 1}
 gb = flow_in_gb(gb, domain)
 # Set transport data
-aq_components = np.array([0])
+aq_components = np.array([0,1])
 num_aq_components = aq_components.size
-num_components = num_aq_components + 1 # one fixed, one aqueous
+num_components = num_aq_components + 0 # one fixed, one aqueous
 gb = transport_in_gb(gb, num_aq_components, domain, kw_t)
 gb_2d = gb.grids_of_dimension(2)[0]
 
@@ -366,13 +371,19 @@ pp.fvutils.compute_darcy_flux(gb,
 # Initialize the string variables, define them on the gb 
 # and provide some initial values
 grid_transport = "tracer"
+grid_fixed = "tracer2"
 mortar_transport = "mortar_tracer"
+mortar_fixed = "mortar_fixed"
+plot_aqueous_part = "aqueous"
+
 
 # Loop over the grids and edges
 # At each cell, we have num_components 
 # In this code, the number of components and aqueous components are the same
 for g,d in gb:
-    d[pp.PRIMARY_VARIABLES] = {grid_transport: {"cells": num_components } }
+    d[pp.PRIMARY_VARIABLES] = {grid_transport: {"cells": num_components }, 
+                               #grid_fixed: {"cells": 1}
+                               }
     pp.set_state(d)
     
     IC1 = np.zeros(g.num_cells)
@@ -389,17 +400,21 @@ for g,d in gb:
     
     d[pp.STATE][grid_transport] = combined_IC
 # end g,d-loop
-    
+
+# Only for the aqueous components    
 for e,d in gb.edges():
-    d[pp.PRIMARY_VARIABLES] = {mortar_transport: {"cells": num_components } }
+    
+    d[pp.PRIMARY_VARIABLES] = {mortar_transport: {"cells": num_aq_components },
+                              # mortar_fixed: {"cells": 1}
+                                }
     pp.set_state(d)
     
     IC1 = np.zeros(d["mortar_grid"].num_cells)
-    IC2 = np.zeros(d["mortar_grid"].num_cells) if num_components > 1 else None
+    IC2 = np.zeros(d["mortar_grid"].num_cells) if num_aq_components > 1 else None
     
-    combined_IC = np.zeros(IC1.size+IC2.size) if num_components > 1 else np.zeros(IC1.size)
+    combined_IC = np.zeros(IC1.size+IC2.size) if num_aq_components > 1 else np.zeros(IC1.size)
     
-    if num_components > 1: 
+    if num_aq_components > 1: 
         combined_IC[::2] = IC1
         combined_IC[1::2] = IC2 
     else:
@@ -425,7 +440,7 @@ equation_manager_for_transport = pp.ad.EquationManager(gb, dof_manager_for_trans
 
 # AD-variables
 T = equation_manager_for_transport.merge_variables( 
-    [ (g, grid_transport) for g in grid_list ] 
+    [ (g, grid_transport) for g in grid_list ],
     )
 
 if len(edge_list) > 0:
@@ -455,7 +470,6 @@ if len(edge_list) > 0:
 dt = 0.001
 T_prev = T.previous_timestep()
 
-
 cols = np.ravel(
     aq_components.reshape((-1, 1)) + (num_components * np.arange(gb.num_cells() )), "F"
 )
@@ -480,34 +494,24 @@ transport = (
     - all_2_aquatic.transpose() * div * upwind.outflow_neumann * all_2_aquatic * T # 
     )
 
-# The trace operator 
-trace = pp.ad.Trace(gb, grid_list, nd= num_components) 
 
-# # check numerical values
-# trace_expr = pp.ad.Expression(trace.trace, dof_manager_for_transport).to_ad(gb).A
-
-# #transport_val = pp.ad.Expression(eta, dof_manager_for_transport).to_ad(gb)
-# mortar_eta_val = pp.ad.Expression( mortar_projection.mortar_to_primary_int ,
-#                                   dof_manager_for_transport).to_ad(gb).A
-
-
-# Add the projections from the mortar onto the the lower-dimensional grids
-# I.e. the term -\Xi * eta (see Eq 3.6) in the pp-article
 if len(edge_list) > 0 :
-    transport += trace.inv_trace * mortar_projection.mortar_to_primary_int * eta
     
-    transport -= mortar_projection.mortar_to_secondary_int * eta
-# end if
+    # The trace operator 
+    trace = pp.ad.Trace(gb, grid_list, nd= num_components) 
 
+    # # check numerical values
+    # trace_expr = pp.ad.Expression(trace.trace, dof_manager_for_transport).to_ad(gb).A
+    # #transport_val = pp.ad.Expression(eta, dof_manager_for_transport).to_ad(gb)
+    # mortar_eta_val = pp.ad.Expression( mortar_projection.mortar_to_primary_int ,
+    #                                   dof_manager_for_transport).to_ad(gb).A
 
-# Transport over the interfaces
-if len(edge_list) > 0:
-    
     # Like earlier, we need a mapping between the aquoues and "all" spcecies
     # but now with mortar_cells
     cols2 = np.ravel(
     aq_components.reshape((-1, 1)) + 
-    ( num_components * np.arange(gb.num_mortar_cells() )), "F" )
+    ( num_components * np.arange(gb.num_mortar_cells() )), "F" 
+    )
     
     sz2 = num_aq_components * gb.num_mortar_cells()
     rows2 = np.arange(sz2)
@@ -520,8 +524,31 @@ if len(edge_list) > 0:
             shape=(num_aq_components * gb.num_mortar_cells(), 
                    num_components * gb.num_mortar_cells() )
             ).tocsr()
+        ) # size num*aq*comp *num_mortar_cells x num_comp * num_mortar_cells 
+    
+    # Add the projections from the mortar onto the the lower-dimensional grids
+    # I.e. the term -\Xi * eta (see Eq 3.6) in the pp-article
+    
+    # Also, eta is only posed the aqueous components, so we need to map 
+    # them to all species
+    
+    transport += (
+        trace.inv_trace * mortar_projection.mortar_to_primary_int *
+        all_2_aquatic2.transpose() *
+        eta
         )
     
+    transport -= (
+        mortar_projection.mortar_to_secondary_int * 
+        all_2_aquatic2.transpose() *
+        eta
+        )
+# end if
+
+
+# Transport over the interfaces
+if len(edge_list) > 0:
+        
     # Some the tools we need
     up_flux = upwind_coupling.flux
     up_primary = upwind_coupling.upwind_primary
@@ -540,7 +567,7 @@ if len(edge_list) > 0:
     # Project the concentration from a higher dim on a lower dim. 
     # Similar to line 181 in hyperbolic interface code 
     high_to_low = ( 
-        all_2_aquatic2.transpose() *
+        #all_2_aquatic2.transpose() *
         up_flux * up_primary * # Scale values
         all_2_aquatic2 *
         mortar_projection.primary_to_mortar_avg * # Project onto mortar grid
@@ -552,7 +579,7 @@ if len(edge_list) > 0:
     
     # Line 187 in hyperbolic interface code
     low_to_high = (
-        all_2_aquatic2.transpose() *
+        #all_2_aquatic2.transpose() *
         up_flux * up_secondary * # Scale
         all_2_aquatic2 *
         mortar_projection.secondary_to_mortar_avg * # Projection from lower to mortar grids
@@ -561,9 +588,10 @@ if len(edge_list) > 0:
     
     # The coupling term
     transport_over_interface = ( 
-        all_2_aquatic2.transpose() *
+        #all_2_aquatic2.transpose() *
         upwind_coupling.mortar_discr *
-        all_2_aquatic2 * eta 
+        #all_2_aquatic2 * 
+        eta 
 
         - (high_to_low + low_to_high ) 
         
@@ -590,39 +618,10 @@ equation_manager_for_transport.discretize(gb)
 data_2d = gb.node_props(gb.grids_of_dimension(2)[0] )
 #data_1d = gb.node_props(gb.grids_of_dimension(1)[0] )
 
-#%%
-# if len(edge_list) > 0 and num_aq_components > 1:
-    
-#     # Copy the coupling discretixation matrices
-#     matrix_dictionary = d[pp.DISCRETIZATION_MATRICES][kw_t].copy()
-    
-#     # The id-matrix
-#     eye_num_comp = scs.eye(num_aq_components)
-    
-#     d[pp.DISCRETIZATION_MATRICES][kw_t]["flux"] = scs.kron(
-#       matrix_dictionary["flux"],  eye_num_comp 
-#         ).tocsr() 
-       
-#     d[pp.DISCRETIZATION_MATRICES][kw_t]["inv_trace"] = scs.kron(
-#         matrix_dictionary["inv_trace"] ,  eye_num_comp
-#         ).tocsr()   
- 
-#     d[pp.DISCRETIZATION_MATRICES][kw_t]["mortar_discr"] = scs.kron(
-#         matrix_dictionary["mortar_discr"], eye_num_comp
-#         ).tocsr() 
-       
-#     d[pp.DISCRETIZATION_MATRICES][kw_t]["trace"] = scs.kron(
-#         matrix_dictionary["trace"], eye_num_comp 
-#         ).tocsr() 
-    
-#     d[pp.DISCRETIZATION_MATRICES][kw_t]["upwind_primary"] = scs.kron(
-#         matrix_dictionary["upwind_primary"], eye_num_comp
-#         ).tocsr()
 
-#     d[pp.DISCRETIZATION_MATRICES][kw_t]["upwind_secondary"] = scs.kron(
-#         matrix_dictionary["upwind_secondary"], eye_num_comp 
-#         ).tocsr()
-    
+A_tr,_=equation_manager_for_transport.assemble_matrix_rhs()
+A_tr[np.abs(A_tr<1e-10)]=0
+plt.spy(A_tr)
 
 
 #%%  Advance forward in time
@@ -642,17 +641,32 @@ for i in range(n_steps):
     # Solve in order to advance forward in time.
     # Think of this as the "dt*stuff" in "sol = sol + dt*stuff"
     x = spla.spsolve(A_tracer, b_tracer)
-    
+
     # Distribute (in an additive manner, ie update) the solution
     dof_manager_for_transport.distribute_variable(x, additive=True)  
-
+    
 # end i-loop
 
-# Plot the solution (in a fractued domain). What to do with several components
-pp.plot_grid(gb, grid_transport, figsize=(15,12))  
+
+#%% Plot solutions 
+
+# This cannot be an efficient way 
+for _, d in gb:
+    d[pp.STATE][plot_aqueous_part] = d[pp.STATE][grid_transport][0::2]
+    
+for _, d in gb.edges():
+    d[pp.STATE][plot_aqueous_part] = d[pp.STATE][mortar_transport][0::2]
+
+
+
+# Plot the solution (in a fractued domain). 
+pp.plot_grid(gb, plot_aqueous_part, figsize=(15,12))  
+#sol1 = data_2d[pp.STATE]["tracer"][0::2]
+#pp.plot_grid(gb_2d, sol1, figsize=(15,12))
+
 
 # Plot the solution (the aqueous component for a Cartesian 
-# grid without fracture hidden in a gb)
+# grid without fracture, hidden in a gb)
 #pp.plot_grid(gb_2d, x[0:50:2], figsize=(15,12))  
 
 
