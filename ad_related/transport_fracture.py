@@ -6,7 +6,7 @@ Created on Fri May 28 08:31:36 2021
 Test script for transport in a domain with a fracture.
 
 IMPORTANT
-To be able to run this script, you will need the grid_operator.py and 
+To run this script, you will need the grid_operator.py and 
 hyperbolic_interface_law.py that can be found at my forked porepy_lab.
 
 @author: shin.banshoya@uib.no
@@ -371,20 +371,14 @@ pp.fvutils.compute_darcy_flux(gb,
 # Initialize the string variables, define them on the gb 
 # and provide some initial values
 grid_transport = "tracer"
-grid_fixed = "tracer2"
 mortar_transport = "mortar_tracer"
-mortar_fixed = "mortar_fixed"
 plot_aqueous_part = "aqueous"
 
 
 # Loop over the grids and edges
 # At each cell, we have num_components 
-# In this code, the number of components and aqueous components are the same
 for g,d in gb:
-    d[pp.PRIMARY_VARIABLES] = {grid_transport: {"cells": num_components }, 
-                               #grid_fixed: {"cells": 1}
-                               }
-    pp.set_state(d)
+    d[pp.PRIMARY_VARIABLES] = {grid_transport: {"cells": num_components }}
     
     IC1 = np.zeros(g.num_cells)
     IC2 = np.zeros(g.num_cells) if num_components > 1 else None
@@ -404,10 +398,7 @@ for g,d in gb:
 # Only for the aqueous components    
 for e,d in gb.edges():
     
-    d[pp.PRIMARY_VARIABLES] = {mortar_transport: {"cells": num_aq_components },
-                              # mortar_fixed: {"cells": 1}
-                                }
-    pp.set_state(d)
+    d[pp.PRIMARY_VARIABLES] = {mortar_transport: {"cells": num_aq_components }}
     
     IC1 = np.zeros(d["mortar_grid"].num_cells)
     IC2 = np.zeros(d["mortar_grid"].num_cells) if num_aq_components > 1 else None
@@ -494,13 +485,13 @@ transport = (
     - all_2_aquatic.transpose() * div * upwind.outflow_neumann * all_2_aquatic * T # 
     )
 
-
+#%%
 if len(edge_list) > 0 :
     
     # The trace operator 
     trace = pp.ad.Trace(gb, grid_list, nd= num_components) 
 
-    # # check numerical values
+    # Check numerical values
     # trace_expr = pp.ad.Expression(trace.trace, dof_manager_for_transport).to_ad(gb).A
     # #transport_val = pp.ad.Expression(eta, dof_manager_for_transport).to_ad(gb)
     # mortar_eta_val = pp.ad.Expression( mortar_projection.mortar_to_primary_int ,
@@ -529,13 +520,10 @@ if len(edge_list) > 0 :
     # Add the projections from the mortar onto the the lower-dimensional grids
     # I.e. the term -\Xi * eta (see Eq 3.6) in the pp-article
     
-    # Also, eta is only posed the aqueous components, so we need to map 
-    # them to all species
-    
     transport += (
         trace.inv_trace * mortar_projection.mortar_to_primary_int *
-        all_2_aquatic2.transpose() *
-        eta
+        all_2_aquatic2.transpose() * # this serves as a "coupling factor"
+        eta                          # to ensure that the multiplication is ok
         )
     
     transport -= (
@@ -544,7 +532,6 @@ if len(edge_list) > 0 :
         eta
         )
 # end if
-
 
 # Transport over the interfaces
 if len(edge_list) > 0:
@@ -589,10 +576,9 @@ if len(edge_list) > 0:
     # The coupling term
     transport_over_interface = ( 
         #all_2_aquatic2.transpose() *
-        upwind_coupling.mortar_discr *
+        upwind_coupling.mortar_discr * eta 
         #all_2_aquatic2 * 
-        eta 
-
+        
         - (high_to_low + low_to_high ) 
         
         )
@@ -618,11 +604,9 @@ equation_manager_for_transport.discretize(gb)
 data_2d = gb.node_props(gb.grids_of_dimension(2)[0] )
 #data_1d = gb.node_props(gb.grids_of_dimension(1)[0] )
 
-
 A_tr,_=equation_manager_for_transport.assemble_matrix_rhs()
 A_tr[np.abs(A_tr<1e-10)]=0
 plt.spy(A_tr)
-
 
 #%%  Advance forward in time
 # Final time and number of steps
@@ -646,7 +630,6 @@ for i in range(n_steps):
     dof_manager_for_transport.distribute_variable(x, additive=True)  
     
 # end i-loop
-
 
 #%% Plot solutions 
 
