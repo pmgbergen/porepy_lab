@@ -8,7 +8,10 @@ Test script for transport in a domain with a fracture.
 IMPORTANT
 To run this script, you will need the grid_operator.py and 
 hyperbolic_interface_law.py that can be found at my forked porepy_lab.
-
+Moreover, one needs to add the line 
+"matrix_dictionary[self.outflow_neumann_matrix_key] = sps.csr_matrix((0,1)) "
+in upwind.py after line 195 (at the shortcut for point grid)
+ 
 @author: shin.banshoya@uib.no
 """
 
@@ -29,14 +32,13 @@ def flow_in_gb(gb, domain_size):
     a = 1e-4
     
     # The permeability in the fracture, matrix and at the interface
-    fracture_permeability = 1e2
-    matrix_permeability = 1
+    fracture_permeability = 1e1
+    matrix_permeability = 1e-1
     interface_permeability = np.array([1e2])
     
     for g, d in gb:
         
-        # Assign aperture. For now we keep the aperture fixed; for the not to far away future, 
-        # we will use some thing like described Steefel and Lichtner for changes in aperture 
+        # Assign aperture. 
         a_dim = np.power(a, gb.dim_max() - g.dim)
         aperture = np.ones(g.num_cells) * a_dim
           
@@ -44,9 +46,7 @@ def flow_in_gb(gb, domain_size):
         
             # Set the permeability
             K = np.ones(g.num_cells)
-            perm = pp.SecondOrderTensor(kxx=matrix_permeability* K, 
-                                        kyy=matrix_permeability* K, 
-                                        kzz=1)
+            perm = pp.SecondOrderTensor(matrix_permeability* K)
       
             # Set boundary condtions. Neumann inflow on the left, Dirichlet outflow on the right
             bound_faces = g.tags["domain_boundary_faces"].nonzero()[0]  
@@ -117,98 +117,129 @@ def transport_in_gb(gb, num_aq_components, domain, parameter_keyword):
         
         unity = np.ones(g.num_cells)
         
-        if g.dim == 2:
+        # First set boundary conditions
+        b_faces = g.tags["domain_boundary_faces"].nonzero()[0]
+        
+        if b_faces.size != 0:
                   
-            # Get the number of cells used to discretize in the y-direction. 
-            # We need this for the boundary conditions, atleast in 2D
-            Ny = g.cart_dims[1]
-            
             # Boundary conditions for the advective problem
-            b_faces = g.tags["domain_boundary_faces"].nonzero()[0]
             b_face_centers = g.face_centers[:, b_faces]
             labels = np.array( ["neu"]*b_faces.size )
            
             # Dirichlet inflow at left. Zero-Neumann on the rest
             left = np.ravel( np.argwhere( b_face_centers[0, :] < domain["xmin"] + 1e-4 ) )
-            right = np.ravel( np.argwhere( b_face_centers[0, :] > domain["xmax"] - 1e-4  ) )
-            labels[left] = "dir"
+            right = np.ravel( np.argwhere( b_face_centers[0, :] > domain["xmax"] - 1e-4  ) ) 
             #labels[right] = "dir"
-            bc = pp.BoundaryCondition(g, b_faces, labels)
-           
+         
             # Expand bc indicies
             expanded_left = pp.fvutils.expand_indices_nd(b_faces[left], num_aq_components)
                        
             # Set bc values. At each face, we have num_aq_components bc values. 
             extended_bc_values = np.zeros(g.num_faces * num_aq_components)
-            extended_bc_values[expanded_left] = np.tile( np.ones(num_aq_components) , Ny)
-            #np.array([0.3, 0.3, 0.3, 0])
             
-            # Set the porosity, the values are as in the tracer tutorial
-            porosity = 0.2 * unity
-            aperture = 1
+            # Inflow in 2D, the highest dimension in this work 
+            if g.dim == gb.dim_max():
+                # Get the number of cells used to discretize in the y-direction. 
+                # We need this for the boundary conditions, atleast in 2D
+                Ny = b_faces[left].size
+                labels[left] = "dir"
+                extended_bc_values[expanded_left] = np.tile( np.ones(num_aq_components) , Ny)
+            # end if
+            
+            bc = pp.BoundaryCondition(g, b_faces, labels)
             
             specified_paramters = {"bc": bc,
                                    "bc_values": extended_bc_values,
-                                   #"mass_weight": porosity * aperture, 
                                    "num_components": num_aq_components
-                                   }
-            
-            mass_data = { "num_components": num_components,
-                         "mass_weight": porosity*aperture                
-                }
+                            }
+
         else:
             
-            # Boundary conditions betweem the fracture and the matrix for the transport.
-            # It should be a continuity condition: conc(at fracture) = conc(at matrix) 
-            b_faces = g.tags["domain_boundary_faces"].nonzero()[0]
-            b_face_centers = g.face_centers[:, b_faces]
-            labels = np.array( ["neu"]*b_faces.size )
-           
             bc = pp.BoundaryCondition(g)
-            porosity = 0.8 * unity 
-            aperture = np.power(1e-4, gb.dim_max() - g.dim)
             
             specified_paramters = {"bc": bc,
                                    "bc_values": np.zeros(g.num_faces * num_aq_components),
-                                   #"mass_weight": porosity * aperture, 
                                    "num_components": num_aq_components
-                                   }
-            mass_data = { "num_components": num_components,
-                         "mass_weight": porosity*aperture                
-                }
-            
+                            }
         # end if-else
         
+        # Next, set porosity; the values are as in the tracer tutorial
+        if g.dim == gb.dim_max():
+            porosity = 0.2 * unity
+            aperture = 1
+        else :
+            porosity = 0.8 * unity 
+            aperture = np.power(1e-4, gb.dim_max() - g.dim)
+        # end if-else        
+                
+                
+        mass_data = {"num_components": num_components,
+                     "mass_weight": porosity * aperture   
+                     }
+                
         # Initialize parameters
         pp.initialize_data(g, d, parameter_keyword , specified_paramters)
-        pp.initialize_data(g, d, "mass" , mass_data)
+        d[pp.PARAMETERS]["mass"] = mass_data
+        d[pp.DISCRETIZATION_MATRICES]["mass"] = {}
+            
         
-        # For visualizations purposes later on
-        d[pp.STATE] = {"dimension": g.dim * np.ones(g.num_cells)}
+    # end g,d-loop
         
-        # Finally, loop over the interfaces
-        for e,d in gb.edges():
-            d[pp.PARAMETERS].update_dictionaries(parameter_keyword,
-                                                 {"num_components": num_aq_components } )
-            d[pp.DISCRETIZATION_MATRICES][parameter_keyword] = {}
-        # end e,d-loop
+    # Finally, loop over the interfaces
+    for e,d in gb.edges():
+        d[pp.PARAMETERS].update_dictionaries(parameter_keyword,
+                                             {"num_components": num_aq_components } )
+        d[pp.DISCRETIZATION_MATRICES][parameter_keyword] = {}
+    # end e,d-loop
     
     return gb
 
 #%% Create a fracture and a gb
-frac = np.array( [ [1, 1], [0.1, 0.9]   ]) # Changed from[0.75, 0.75], [0.0, 0.9]
-frac2 = np.array( [[1.5, 1.5], [0.5, 1] ])
-fracs=[frac, ]
-for f in fracs:
-    is_x_frac = f[1, 0] == f[1, 1]
-    is_y_frac = f[0, 0] == f[0, 1]
-# end f-loop
+# frac = np.array( [ [1, 1], [0.1, 0.9] ]) # Changed from[0.75, 0.75], [0.0, 0.9]
+# frac2 = np.array([ [0.8, 1.25], [0.8, 0.8] ])  #[1., 1.], [0.0, .1] 
+# frac3 = np.array([ [0.8, 1.25], [0.2, 0.2]])
+# fracs=[frac, frac2, frac3]
+# for f in fracs:
+#     is_x_frac = f[1, 0] == f[1, 1]
+#     is_y_frac = f[0, 0] == f[0, 1]
+# # end f-loop
 
-gb = pp.meshing.cart_grid( fracs  , 
-                          nx=[10,10], 
-                          physdims=np.array( [2 , 1 ]) 
-                          )
-# pp.plot_grid(gb, figsize=(15,12))
+# gb = pp.meshing.cart_grid( fracs  , 
+#                           nx=[10,10], 
+#                           physdims=np.array( [2 , 1 ]) 
+#                           )
+
+
+# Consider three fractures
+pts = np.array([ 
+                # Fracture parallel to the y-axis 
+                [1, 0.9],  # End pts 
+                [1, 0.1], # Statring pts
+                
+                # Fracture parallel to the x-axis
+                [1.6, 0.8], 
+                [0.8, 0.8],
+                 
+                # The third fracture
+                [1.5, 0.1],
+                [0.4, 0.2]
+                 
+                 ]).T 
+
+e = np.array( [ 
+    [0, 1],
+    [2, 3] ,
+    [4, 5],
+    ]).T
+
+
+domain = {"xmin": 0, "xmax": 2, "ymin": 0, "ymax": 1} # domain is 0<x<2,0<y<1
+network_2d = pp.FractureNetwork2d( pts, e, domain)
+
+mesh_args = {"mesh_size_frac": 0.2, "mesh_size_bound": 0.2}
+gb = network_2d.mesh(mesh_args)
+
+pp.plot_grid(gb, figsize=(15,12))
 
 # g = pp.CartGrid([5,5])
 # g.compute_geometry()
@@ -223,11 +254,16 @@ kw_t = "transport"
 domain = {"xmin":0 , "xmax": 2, "ymin": 0, "ymax": 1}
 gb = flow_in_gb(gb, domain)
 # Set transport data
-aq_components = np.array([0,1])
+aq_components = np.array([0])
 num_aq_components = aq_components.size
-num_components = num_aq_components + 0 # one fixed, one aqueous
+num_components = num_aq_components + 1 # one fixed, one aqueous
 gb = transport_in_gb(gb, num_aq_components, domain, kw_t)
 gb_2d = gb.grids_of_dimension(2)[0]
+
+
+data_2d = gb.node_props(gb.grids_of_dimension(2)[0] )
+data_1d = gb.node_props(gb.grids_of_dimension(1)[0] )
+#data_0d = gb.node_props(gb.grids_of_dimension(0)[0] )
 
 #%% Set the sting variables for the flow problem and initialize them on the gb
 
@@ -309,7 +345,7 @@ if len(edge_list) > 0:
     # in th PP-article
     conservation = div * full_flux - sources_from_mortar
 else:
-    # "Classical" mass conservation, ie. div q
+    # "Classical" mass conservation, ie. div flux = 0
     conservation = div * full_flux
 # end if-else    
 
@@ -355,10 +391,10 @@ A, b = equation_manager.assemble_matrix_rhs()
 solution = spla.spsolve(A,b) # Pressure
 
 # Distribute variable (ie. the solution) to local data dictionaries
-dof_manager.distribute_variable(solution, )
+dof_manager.distribute_variable(solution)
 
 # Plot the pressure distribution
-#pp.plot_grid(gb, grid_variable, figsize=(15,12))
+pp.plot_grid(gb, grid_variable, figsize=(15,12))
 
 # Compute the Darcy flux
 pp.fvutils.compute_darcy_flux(gb, 
@@ -398,7 +434,9 @@ for g,d in gb:
 # Only for the aqueous components    
 for e,d in gb.edges():
     
-    d[pp.PRIMARY_VARIABLES] = {mortar_transport: {"cells": num_aq_components }}
+    d[pp.PRIMARY_VARIABLES] = {mortar_transport: {"cells": num_aq_components,
+                                                  "faces": 0}
+                               }
     
     IC1 = np.zeros(d["mortar_grid"].num_cells)
     IC2 = np.zeros(d["mortar_grid"].num_cells) if num_aq_components > 1 else None
@@ -482,14 +520,14 @@ transport = (
     # Advection. 
     + all_2_aquatic.transpose() * div * upwind.upwind * all_2_aquatic * T
     - all_2_aquatic.transpose() * div * upwind.rhs * bc_c
-    - all_2_aquatic.transpose() * div * upwind.outflow_neumann * all_2_aquatic * T # 
+    - all_2_aquatic.transpose() * div * upwind.outflow_neumann * all_2_aquatic * T 
     )
 
 #%%
 if len(edge_list) > 0 :
     
     # The trace operator 
-    trace = pp.ad.Trace(gb, grid_list, nd= num_components) 
+    trace = pp.ad.Trace(gb, grid_list, nd=num_components) 
 
     # Check numerical values
     # trace_expr = pp.ad.Expression(trace.trace, dof_manager_for_transport).to_ad(gb).A
@@ -501,7 +539,7 @@ if len(edge_list) > 0 :
     # but now with mortar_cells
     cols2 = np.ravel(
     aq_components.reshape((-1, 1)) + 
-    ( num_components * np.arange(gb.num_mortar_cells() )), "F" 
+    ( num_components * np.arange( gb.num_mortar_cells() ) ), "F" 
     )
     
     sz2 = num_aq_components * gb.num_mortar_cells()
@@ -518,7 +556,7 @@ if len(edge_list) > 0 :
         ) # size num*aq*comp *num_mortar_cells x num_comp * num_mortar_cells 
     
     # Add the projections from the mortar onto the the lower-dimensional grids
-    # I.e. the term -\Xi * eta (see Eq 3.6) in the pp-article
+    # i.e. the term -\Xi * eta (see Eq (3.6) in the pp-article)
     
     transport += (
         trace.inv_trace * mortar_projection.mortar_to_primary_int *
@@ -601,16 +639,13 @@ equation_manager_for_transport.equations += transport_eq
 # Discretize the equation
 equation_manager_for_transport.discretize(gb)
 
-data_2d = gb.node_props(gb.grids_of_dimension(2)[0] )
-#data_1d = gb.node_props(gb.grids_of_dimension(1)[0] )
-
-A_tr,_=equation_manager_for_transport.assemble_matrix_rhs()
-A_tr[np.abs(A_tr<1e-10)]=0
-plt.spy(A_tr)
+# A_tr,_=equation_manager_for_transport.assemble_matrix_rhs()
+# A_tr[np.abs(A_tr<1e-10)]=0
+# plt.spy(A_tr)
 
 #%%  Advance forward in time
 # Final time and number of steps
-T_end = 0.25
+T_end = 0.2
 n_steps = int(T_end/dt)
 
 # Time-loop
