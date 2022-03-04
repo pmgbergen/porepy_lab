@@ -12,6 +12,16 @@ class FootingProblem(pp.ContactMechanicsBiot):
 
         self.time_step = self.params.get("time_step", 1.)
 
+    def num_dofs(self) -> int:
+        """Total number of degrees of freedom."""
+        return self.dof_manager.num_dofs()
+
+    def pressure_dofs(self) -> np.ndarray:
+        return self.dof_manager.grid_and_variable_to_dofs(self.g, self.scalar_variable)
+
+    def displacement_dofs(self) -> np.ndarray:
+        return self.dof_manager.grid_and_variable_to_dofs(self.g, self.displacement_variable)
+
     def create_grid(self) -> None:
         """Create the grid bucket.
 
@@ -31,6 +41,7 @@ class FootingProblem(pp.ContactMechanicsBiot):
         g: pp.Grid = pp.CartGrid(n_cells, phys_dims)
         g.compute_geometry()
         self.gb: pp.GridBucket = pp.meshing._assemble_in_bucket([[g]])
+        self.g = g
 
     def _set_mechanics_parameters(self) -> None:
         super()._set_mechanics_parameters()
@@ -174,8 +185,23 @@ class FootingProblem(pp.ContactMechanicsBiot):
 
         return sps.diags(L * alpha**2 / Kdr * g.cell_volumes)
 
-    def after_newton_iteration(self, solution_vector: np.ndarray) -> None:
+    def pressure_mass_matrix(self):
+
+        g = [g for g, _ in self.gb.nodes()][0]
+        return sps.diags(g.cell_volumes)
+
+    def after_newton_iteration(self, increment: np.ndarray, residual: np.ndarray, tol: float = 1) -> bool:
         self._nonlinear_iteration += 1
+
+        # Monitor convergence
+        mass_sqrt = 1. / self.params.get("mesh_resolution", 1)
+        increment_norm = np.linalg.norm(mass_sqrt * increment)
+        residual_norm = np.linalg.norm(mass_sqrt * residual)
+
+        print("Iter.", self.nonlinear_iteration(), "| Residual", residual_norm)
+
+        # Check for convergence
+        return residual_norm < tol
 
     def distribute_solution(self, solution_vector: np.ndarray, variables: List[str] = None, overwrite: bool = False) -> None:
         self.dof_manager.distribute_variable(
